@@ -53,13 +53,13 @@ Your file must contain these 11 columns. A 12th column improves latency model ac
 | `user_id` | string | Anonymised user identifier. Any format accepted — cookie, GAID, hashed email, session ID. |
 | `publisher_id` | string | Publisher or supply source identifier. |
 | `ad_size` | string | Creative dimensions (`300x250`, `728x90`, etc.), `native`, `video_pre`, or `unknown`. Nulls are accepted and will be treated as `unknown`. |
-| `bid_price` | float | Your submitted bid in USD. If your DSP logs in CPM, divide by 1,000 before export. |
+| `bid_price` | float | Your submitted bid price. If your DSP logs in CPM, divide by 1,000 before export. |
 | `clearing_price` | float | Price paid on wins. `0.0` on losses. |
 | `is_won` | int | `1` if the auction was won, `0` otherwise. |
 | `is_clicked` | int | `1` if the served impression was clicked. Requires a win. |
 | `is_converted` | int | `1` if a conversion occurred downstream of a click. |
 | `conversion_timestamp` | datetime | UTC datetime of conversion. Null if no conversion. |
-| `conversion_value` | float | Revenue value of conversion in USD. `0.0` if none. **Note:** If your data contains no revenue variance (e.g., all 0s or 1s), the system automatically enters **Binary Conversion Mode**. The LTV model is disabled, and every conversion is fixed at $1.00. |
+| `conversion_value` | float | Revenue value of the conversion in your campaign currency. `0.0` if none. **Note:** If your data contains no revenue variance (e.g., all 0s or 1s), the system automatically enters **Binary Conversion Mode**. The LTV model is disabled, and every conversion is assigned a fixed value of 1.00 |
 | `bid_latency_ms` | float | *(Optional)* Round-trip bid latency in milliseconds. Improves latency model accuracy. |
 
 ### Notes on `user_id`

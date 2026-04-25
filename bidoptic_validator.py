@@ -194,7 +194,7 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
                 if vals.nunique() <= 1:
                     warnings.append(
                         "All conversions have a uniform or zero 'conversion_value'. "
-                        "Simulation will run in Binary Conversion Mode (LTV disabled, each conversion fixed at $1.00)."
+                        "Simulation will run in Binary Conversion Mode (LTV disabled, each conversion assigned a fixed value of 1.00 in your campaign currency)."
                     )
         except Exception:
             pass
