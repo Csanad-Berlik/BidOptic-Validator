@@ -103,6 +103,7 @@ Native and video inventory commonly has no fixed dimensions. Pass `native`, `vid
 | Win rate unusually high | > 60% — confirm the log covers all bid requests, not only wins |
 | Missing conversion timestamps | > 20% of converted rows — AFT delay model accuracy reduced |
 | Date range below recommended | < 14 days — temporal patterns will be less reliable |
+| Date range below evaluation threshold | < 63 days — dataset passes schema validation but is likely too short to run the full evaluation protocol (8 weeks calibration + 1 week holdout). Consider pulling a longer historical window before beginning the evaluation phase. This is informational only and does not affect standalone calibration. |
 | Date range moderately long | > 90 days — older data may reflect market regimes that no longer apply |
 | Date range very long | > 180 days — strong recommendation to trim to the most recent 60–90 days before calibrating |
 | Dataset end date stale | End date > 30 days before today — freshness warning; > 90 days — severe staleness warning, recalibration strongly recommended |
