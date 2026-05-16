@@ -42,6 +42,31 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
     total = actual_total_rows if actual_total_rows is not None else len(df)
     stats["row_count"] = total
 
+    key_cols = [c for c in ["timestamp", "user_id", "publisher_id", "bid_price"] if c in df.columns]
+    if len(key_cols) == 4:
+        try:
+            dup_count = df.duplicated(subset=key_cols).sum()
+            stats["duplicate_rows"] = int(dup_count)
+            if dup_count > 0:
+                dup_rate = dup_count / len(df)
+                if dup_rate > 0.05:
+                    errors.append(
+                        f"Found {dup_count:,} duplicate rows ({dup_rate:.2%}) with identical "
+                        "timestamp, user_id, publisher_id, and bid_price. "
+                        "At this rate, duplicates materially inflate CTR, CVR, and win rate. "
+                        "Deduplicate before resubmitting. If timestamps are second-granularity "
+                        "or bid prices are rounded, consider adding an auction_id column."
+                    )
+                else:
+                    warnings.append(
+                        f"Found {dup_count:,} duplicate rows ({dup_rate:.2%}) with identical "
+                        "timestamp, user_id, publisher_id, and bid_price. "
+                        "Low rates are expected when timestamps are second-granularity or bid prices "
+                        "are rounded. Verify these are not logging artifacts."
+                    )
+        except Exception:
+            pass
+
     if total == 0:
         errors.append("Dataset is empty.")
         return {"errors": errors, "warnings": warnings, "stats": stats}
@@ -107,10 +132,18 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
                     f"Win rate is {win_rate:.3%} — suspiciously low. "
                     "Confirm 'is_won' is encoded as 1/0, not True/False strings."
                 )
-            elif win_rate > 0.60:
+            elif win_rate > 0.30:
+                errors.append(
+                    f"Win rate is {win_rate:.1%} — far above the typical RTB range of 1–15%. "
+                    "This strongly suggests the log contains only won impressions and is missing "
+                    "lost bid requests. All ML models (CTR, CVR, win rate) will be trained on a "
+                    "biased subset and will systematically overestimate performance. "
+                    "Re-export the log to include all bid requests (wins AND losses)."
+                )
+            elif win_rate > 0.20:
                 warnings.append(
-                    f"Win rate is {win_rate:.1%} — unusually high for RTB. "
-                    "Confirm the log covers all bid requests, not only wins."
+                    f"Win rate is {win_rate:.1%} — above the typical RTB range of 1–15%. "
+                    "Verify the log includes all bid requests, not only wins."
                 )
         except Exception:
             errors.append("Column 'is_won' could not be parsed as numeric (expected 0/1).")
@@ -158,15 +191,33 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
         except Exception:
             pass
 
-    if "is_converted" in present_cols and "is_clicked" in present_cols:
+    if "is_converted" in present_cols and "is_won" in present_cols:
         try:
-            click_mask = pd.to_numeric(df["is_clicked"], errors="coerce").fillna(0)
-            conv_mask  = pd.to_numeric(df["is_converted"], errors="coerce").fillna(0)
-            invalid_convs = ((click_mask == 0) & (conv_mask == 1)).sum()
+            won_mask2  = pd.to_numeric(df["is_won"],       errors="coerce").fillna(0)
+            conv_mask2 = pd.to_numeric(df["is_converted"], errors="coerce").fillna(0)
+            invalid_convs = ((won_mask2 == 0) & (conv_mask2 == 1)).sum()
             if invalid_convs > 0:
                 errors.append(
-                    f"Found {invalid_convs:,} rows where is_converted=1 but is_clicked=0. "
-                    "A conversion cannot occur without a preceding click. Check your data joins."
+                    f"Found {invalid_convs:,} rows where is_converted=1 but is_won=0. "
+                    "A conversion cannot be attributed to an impression you did not win. "
+                    "Check for view-through attribution or bad data joins."
+                )
+        except Exception:
+            pass
+
+    if "is_converted" in present_cols and "is_clicked" in present_cols and "is_won" in present_cols:
+        try:
+            _won_m   = pd.to_numeric(df["is_won"],       errors="coerce").fillna(0) == 1
+            _click_m = pd.to_numeric(df["is_clicked"],   errors="coerce").fillna(0) == 0
+            _conv_m  = pd.to_numeric(df["is_converted"], errors="coerce").fillna(0) == 1
+            _vt      = (_won_m & _click_m & _conv_m).sum()
+            _total_c = _conv_m.sum()
+            if _total_c > 0 and _vt / _total_c > 0.05:
+                warnings.append(
+                    f"{_vt:,} conversions ({_vt / _total_c:.1%}) have is_clicked=0 on won rows. "
+                    "These are view-through conversions. The CVR model trains on clicked rows only "
+                    "and will not see these events, so calibrated CVR and CPA estimates will be "
+                    "understated if view-through attribution is a meaningful part of your campaign."
                 )
         except Exception:
             pass
@@ -188,6 +239,18 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
 
     if "conversion_value" in present_cols and "is_converted" in present_cols:
         try:
+            not_conv_mask = pd.to_numeric(df["is_converted"], errors="coerce").fillna(0) == 0
+            bad_ltv = (pd.to_numeric(df.loc[not_conv_mask, "conversion_value"], errors="coerce") > 0).sum()
+            if bad_ltv > 0:
+                warnings.append(
+                    f"{bad_ltv:,} rows have is_converted=0 but conversion_value > 0. "
+                    "Non-converting rows must have conversion_value=0.0. "
+                    "This will corrupt LTV model training."
+                )
+        except Exception:
+            pass
+
+        try:
             converted_rows = df[pd.to_numeric(df["is_converted"], errors="coerce") == 1]
             if len(converted_rows) > 0:
                 vals = pd.to_numeric(converted_rows["conversion_value"], errors="coerce").fillna(0.0)
@@ -196,6 +259,47 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
                         "All conversions have a uniform or zero 'conversion_value'. "
                         "Simulation will run in Binary Conversion Mode (LTV disabled, each conversion assigned a fixed value of 1.00 in your campaign currency)."
                     )
+        except Exception:
+            pass
+
+    if "clearing_price" in present_cols and "is_won" in present_cols:
+        try:
+            _won_cp = df[pd.to_numeric(df["is_won"], errors="coerce") == 1]
+            if len(_won_cp) > 0:
+                _zero_rate = (
+                    pd.to_numeric(_won_cp["clearing_price"], errors="coerce").fillna(0.0) == 0.0
+                ).mean()
+                if _zero_rate > 0.01:
+                    errors.append(
+                        f"{_zero_rate:.1%} of won auctions have clearing_price=0.0. "
+                        "Won rows must carry the price paid — zero values indicate a data join "
+                        "error or a null that was filled to 0 before export. "
+                        "The floor price model will learn zero floors for affected publishers, "
+                        "making the simulation unrealistically easy."
+                    )
+        except Exception:
+            pass
+
+    if "clearing_price" in present_cols and "bid_price" in present_cols and "is_won" in present_cols:
+        try:
+            _won_sp = df[pd.to_numeric(df["is_won"], errors="coerce") == 1].copy()
+            if len(_won_sp) >= 100:
+                _cp = pd.to_numeric(_won_sp["clearing_price"], errors="coerce")
+                _bp = pd.to_numeric(_won_sp["bid_price"],      errors="coerce")
+                _valid = _cp.notna() & _bp.notna() & (_bp > 0) & (_cp > 0)
+                if _valid.sum() >= 50:
+                    _ratio_median = float((_cp[_valid] / _bp[_valid]).median())
+                    if _ratio_median < 0.70:
+                        errors.append(
+                            f"Median clearing_price / bid_price on won auctions is {_ratio_median:.2f}. "
+                            "This is consistent with second-price (Vickrey) auction mechanics. "
+                            "BidOptic does not support second-price auction data — the floor price, "
+                            "win rate, and margin models require first-price clearing data to calibrate "
+                            "correctly. Calibrating from second-price logs will produce systematically "
+                            "wrong floor prices and unreliable simulation results. "
+                            "If your exchange uses second-price, set clearing_price equal to bid_price "
+                            "before export."
+                        )
         except Exception:
             pass
 
@@ -325,6 +429,86 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
                     )
             except Exception:
                 pass
+        try:
+            median_bid = pd.to_numeric(df["bid_price"], errors="coerce").median()
+            if median_bid > 10.0:
+                warnings.append(
+                    f"Median bid_price is ${median_bid:.2f}. All price columns must be per-impression USD, "
+                    "not CPM. If your DSP logs in CPM, divide by 1,000 before export."
+                )
+        except Exception:
+            pass
+
+    if "clearing_price" in present_cols:
+        if (pd.to_numeric(df["clearing_price"], errors="coerce") < 0).any():
+            errors.append("'clearing_price' contains negative values. Clearing prices must be >= 0.")
+        if "is_won" in present_cols:
+            try:
+                won_cp = pd.to_numeric(
+                    df.loc[pd.to_numeric(df["is_won"], errors="coerce") == 1, "clearing_price"],
+                    errors="coerce",
+                ).dropna()
+                if len(won_cp) > 0:
+                    median_cp = float(won_cp.median())
+                    if median_cp > 10.0:
+                        errors.append(
+                            f"Median clearing_price on won rows is ${median_cp:.2f}. "
+                            "clearing_price must be per-impression USD, not CPM. "
+                            "If your exchange reports clearing_price in CPM, divide by 1,000 before export. "
+                            "Training the floor price model on CPM values will produce floors 1,000× too high "
+                            "and make the simulation unwinnable."
+                        )
+            except Exception:
+                pass
+
+    if "publisher_id" in present_cols:
+        try:
+            pub_counts        = df["publisher_id"].value_counts(normalize=True)
+            top_pub_share     = float(pub_counts.iloc[0])
+            top_pub_id        = pub_counts.index[0]
+            stats["publisher_count"]      = int(pub_counts.shape[0])
+            stats["top_publisher_share"]  = round(top_pub_share, 4)
+            if top_pub_share > 0.60:
+                warnings.append(
+                    f"Publisher '{top_pub_id}' accounts for {top_pub_share:.1%} of all rows "
+                    f"({pub_counts.shape[0]} publishers total). Minority publishers have too few "
+                    "impressions to fit reliable floor, CTR, and win-rate models independently — "
+                    "they will fall back to population-average priors. If minority publisher accuracy "
+                    "matters, consider pulling a longer window or filtering to your highest-volume supply sources."
+                )
+            elif top_pub_share > 0.40:
+                warnings.append(
+                    f"Publisher '{top_pub_id}' accounts for {top_pub_share:.1%} of all rows "
+                    f"({pub_counts.shape[0]} publishers total). Models for minority publishers will "
+                    "have less signal and higher variance. This is usually acceptable but worth noting "
+                    "if minority publisher performance is a key evaluation metric."
+                )
+        except Exception:
+            pass
+
+    if "user_id" in present_cols:
+        try:
+            unique_users     = df["user_id"].nunique()
+            uniqueness_ratio = unique_users / len(df)
+            stats["unique_user_count"]    = int(unique_users)
+            stats["user_id_unique_ratio"] = round(uniqueness_ratio, 4)
+            if uniqueness_ratio > 0.80:
+                warnings.append(
+                    f"user_id uniqueness ratio is {uniqueness_ratio:.1%} ({unique_users:,} unique IDs "
+                    f"across {len(df):,} rows). This suggests non-persistent identifiers — rotating "
+                    "session IDs, cookieless traffic, or per-request tokens. User-level frequency, "
+                    "recency, and LTV models will degrade to session-level signal. Publisher and "
+                    "segment models are unaffected."
+                )
+            elif uniqueness_ratio > 0.50:
+                warnings.append(
+                    f"user_id uniqueness ratio is {uniqueness_ratio:.1%} ({unique_users:,} unique IDs "
+                    f"across {len(df):,} rows). Moderate ID churn — possibly a mix of persistent and "
+                    "non-persistent identifiers. User-level model accuracy may be reduced for the "
+                    "non-persistent portion of your traffic."
+                )
+        except Exception:
+            pass
 
     return {"errors": errors, "warnings": warnings, "stats": stats}
 
