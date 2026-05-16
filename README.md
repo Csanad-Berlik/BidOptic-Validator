@@ -41,8 +41,8 @@ python bidoptic_validator.py --data /path/to/your/actual_logs.parquet
 
 If your dataset passes, a machine-readable receipt is written to the current directory. Send that file to your BidOptic contact to proceed — no raw data required.
 
-[!NOTE]
-For datasets exceeding 50,000 rows, statistical checks (null rates, logical consistency, date ranges) run on a stratified random sample of 50,000 rows. Row count and conversion count are extrapolated to the full file size — this is why conversion totals are labelled "Est." in the terminal output. The row count check always uses the full file.
+> [!NOTE]
+> For datasets exceeding 50,000 rows, statistical checks (null rates, logical consistency, date ranges) run on a stratified random sample of 50,000 rows. Row count and conversion count are extrapolated to the full file size — this is why conversion totals are labelled "Est." in the terminal output. The row count check always uses the full file.
 
 ---
 
