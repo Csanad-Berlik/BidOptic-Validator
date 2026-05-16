@@ -69,6 +69,8 @@ Your file must contain these 11 columns. A 12th column improves latency model ac
 
 BidOptic treats `user_id` as an opaque token and normalises all formats internally. Persistent identifiers (third-party cookies, authenticated IDs) yield richer user-level signal. Non-persistent identifiers (cookieless EU traffic, rotating session IDs) degrade gracefully to session-level signal — publisher and segment models remain accurate.
 
+The validator measures the ratio of unique `user_id` values to total rows as a proxy for identifier persistence. A ratio above 50% triggers a warning; above 80% a stronger warning. Neither is a blocker — calibration proceeds either way, but user-level frequency, recency, and LTV model accuracy will be reduced for the non-persistent portion of your traffic.
+
 ### Notes on `ad_size`
 
 Native and video inventory commonly has no fixed dimensions. Pass `native`, `video_pre`, or `unknown` rather than leaving the field null. BidOptic's floor, CTR, and latency models learn population-average behaviour for uncategorised placements.
@@ -89,8 +91,13 @@ Native and video inventory commonly has no fixed dimensions. Pass `native`, `vid
 | Insufficient conversions | < 50 total conversions — CVR and delay models will overfit |
 | Timestamp unparseable | > 5% of values cannot be parsed |
 | Date range too short | < 7 days — insufficient for temporal and pacing patterns |
-| Negative values | `bid_latency_ms`, `conversion_value`, or `bid_price` contains negative values |
-| Logical Impossibilities | Rows where `is_clicked=1` but `is_won=0`; rows where `is_converted=1` but `is_clicked=0`; or `clearing_price` > `bid_price` |
+| Second-price auction detected | Median `clearing_price / bid_price` on won rows < 0.70 — BidOptic does not support second-price auction data; set `clearing_price` equal to `bid_price` before export |
+| Duplicate rows | > 5% rows with identical `timestamp`, `user_id`, `publisher_id`, and `bid_price` — materially inflates CTR, CVR, and win rate |
+| Negative values | `bid_latency_ms`, `conversion_value`, `bid_price`, or `clearing_price` contains negative values |
+| CPM unit error | Median `clearing_price` on won rows > $10 — column is almost certainly in CPM, not per-impression |
+| Zero `clearing_price` on won rows | > 1% of won rows have `clearing_price=0.0` — indicates a data join error or null filled to 0 before export |
+| Win rate far too high | > 30% — log almost certainly contains only won impressions; lost bid requests are missing |
+| Logical impossibilities | Rows where `is_clicked=1` but `is_won=0`; rows where `is_converted=1` but `is_won=0`; or `clearing_price` > `bid_price` |
 
 ### Warnings — calibration runs but accuracy is reduced
 
@@ -100,7 +107,12 @@ Native and video inventory commonly has no fixed dimensions. Pass `native`, `vid
 | ML CVR/LTV Threshold | 50–99 conversions — Simulation falls back to tabular segment-mean estimates. 100+ required for ML. |
 | Non-critical column null rate | > 20% nulls in `clearing_price`, `is_clicked`, or `conversion_value` |
 | `ad_size` nulls | Any null triggers an informational warning. `ad_size` is not subject to the 20% threshold — nulls are expected for native and video inventory and require no action if they reflect your inventory mix. |
-| Win rate unusually high | > 60% — confirm the log covers all bid requests, not only wins |
+| Duplicate rows (low rate) | < 5% rows with identical `timestamp`, `user_id`, `publisher_id`, and `bid_price` — low rates are expected with second-granularity timestamps or rounded bid prices, but worth verifying |
+| Win rate elevated | > 20% — above the typical RTB range; verify the log includes all bid requests, not only wins |
+| `conversion_value` on non-converting rows | Any rows with `is_converted=0` but `conversion_value > 0` — corrupts LTV model training |
+| View-through conversions | > 5% of conversions on won rows have `is_clicked=0` — CVR estimates will be understated if view-through attribution is material |
+| Publisher concentration | Single publisher > 40% of rows (warning) or > 60% (strong warning) — minority publisher models fall back to population-average priors |
+| User ID uniqueness | > 50% unique IDs per row (warning) or > 80% (strong warning) — suggests non-persistent identifiers; user-level models degrade to session-level signal |
 | Missing conversion timestamps | > 20% of converted rows — AFT delay model accuracy reduced |
 | Date range below recommended | < 14 days — temporal patterns will be less reliable |
 | Date range below evaluation threshold | < 63 days — dataset passes schema validation but is likely too short to run the full evaluation protocol (8 weeks calibration + 1 week holdout). Consider pulling a longer historical window before beginning the evaluation phase. This is informational only and does not affect standalone calibration. |
@@ -108,6 +120,7 @@ Native and video inventory commonly has no fixed dimensions. Pass `native`, `vid
 | Date range very long | > 180 days — strong recommendation to trim to the most recent 60–90 days before calibrating |
 | Dataset end date stale | End date > 30 days before today — freshness warning; > 90 days — severe staleness warning, recalibration strongly recommended |
 | Missing `bid_latency_ms` | Latency model falls back to market-average priors |
+| `bid_price` unit check | Median `bid_price` > $10 — column may be in CPM rather than per-impression |
 
 ---
 
