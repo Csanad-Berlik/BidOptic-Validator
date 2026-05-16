@@ -646,17 +646,41 @@ def main():
 
             print(f"Parquet detected. Total rows: {actual_total_rows:,} across {num_row_groups} row group(s). Reading sample for validation...", file=sys.stderr)
 
-            sample_indices = sorted({
-                0,
-                num_row_groups // 2,
-                num_row_groups - 1,
-            })
+            TARGET_SAMPLE = 50_000
 
-            chunks = [parquet_file.read_row_group(i).to_pandas() for i in sample_indices]
-            df = pd.concat(chunks, ignore_index=True)
+            if actual_total_rows <= TARGET_SAMPLE:
+                df = parquet_file.read().to_pandas()
+            else:
+                MAX_GROUPS_TO_READ = 20
 
-            if len(df) > 50_000:
-                df = df.sample(n=50_000, random_state=42).reset_index(drop=True)
+                rg_sizes = [
+                    parquet_file.metadata.row_group(i).num_rows
+                    for i in range(num_row_groups)
+                ]
+
+                if num_row_groups <= MAX_GROUPS_TO_READ:
+                    selected = list(range(num_row_groups))
+                else:
+                    step = (num_row_groups - 1) / (MAX_GROUPS_TO_READ - 1)
+                    selected = sorted({
+                        round(i * step) for i in range(MAX_GROUPS_TO_READ)
+                    })
+                    selected = sorted(set(selected) | {0, num_row_groups - 1})
+
+                selected_total = sum(rg_sizes[i] for i in selected)
+
+                chunks = []
+                for i in selected:
+                    rg_df = parquet_file.read_row_group(i).to_pandas()
+                    budget = max(1, round(TARGET_SAMPLE * rg_sizes[i] / selected_total))
+                    if len(rg_df) > budget:
+                        rg_df = rg_df.sample(n=budget, random_state=42)
+                    chunks.append(rg_df)
+
+                df = pd.concat(chunks, ignore_index=True)
+
+                if len(df) > TARGET_SAMPLE:
+                    df = df.sample(n=TARGET_SAMPLE, random_state=42).reset_index(drop=True)
 
         elif file_path.lower().endswith(".csv"):
             print("CSV detected. Counting rows (this might take a moment)...", file=sys.stderr)
