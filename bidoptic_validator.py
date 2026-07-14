@@ -34,6 +34,37 @@ MIN_ROWS        = 100_000
 WARN_ROWS       = 500_000
 MIN_CONVERSIONS = 50
 
+def check_user_volume_outliers(df):
+    warnings = []
+    stats = {}
+    if "user_id" not in df.columns or len(df) == 0:
+        return warnings, stats
+
+    user_counts = df.groupby("user_id", observed=True).size()
+    if len(user_counts) == 0:
+        return warnings, stats
+
+    median = user_counts.median()
+    p99 = user_counts.quantile(0.99)
+    extreme_threshold = max(median * 50, 200)
+    extreme_users = user_counts[user_counts > extreme_threshold]
+
+    stats["user_volume_p99"] = float(p99)
+    stats["user_volume_median"] = float(median)
+    stats["n_extreme_volume_users"] = int(len(extreme_users))
+    traffic_share = float(extreme_users.sum() / len(df)) if len(df) > 0 else 0.0
+    stats["extreme_volume_user_share_of_traffic"] = traffic_share
+
+    if len(extreme_users) > 0:
+        warnings.append(
+            f"{len(extreme_users)} user_id(s) each generated more than {extreme_threshold:.0f} "
+            f"impressions in the sampled chunk (median user: {median:.0f}), accounting for "
+            f"{traffic_share:.1%} of sampled traffic. This volume pattern is inconsistent with "
+            f"human browsing behavior and is a common signature of bot or scripted traffic. "
+            f"Recommend reviewing these user_ids with your traffic-quality vendor before calibrating."
+        )
+    return warnings, stats
+
 def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
     errors   = []
     warnings = []
