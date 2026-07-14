@@ -541,6 +541,13 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
         except Exception:
             pass
 
+    try:
+        check_warnings, check_stats = check_user_volume_outliers(df)
+        warnings.extend(check_warnings)
+        stats.update(check_stats)
+    except Exception as e:
+        warnings.append(f"Traffic anomaly check 'check_user_volume_outliers' failed to run: {e}")
+
     return {"errors": errors, "warnings": warnings, "stats": stats}
 
 
