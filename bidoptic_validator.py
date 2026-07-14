@@ -117,6 +117,48 @@ def check_publisher_ctr_cvr_divergence(df):
         )
     return warnings, stats
 
+# NOTE: on this tool's 50k-row sample, most users appear only 1-2 times,
+# so this check has limited power here compared to the internal pipeline's
+# larger validation chunk. Kept for parity and to catch egregious cases.
+def check_timestamp_regularity(df, max_users_checked=2000):
+    warnings = []
+    stats = {}
+    if "user_id" not in df.columns or "timestamp" not in df.columns:
+        return warnings, stats
+
+    user_counts = df.groupby("user_id", observed=True).size()
+    candidates = user_counts[user_counts >= 20].nlargest(max_users_checked).index
+    if len(candidates) == 0:
+        return warnings, stats
+
+    sub = df[df["user_id"].isin(candidates)].copy()
+    sub["timestamp"] = pd.to_datetime(sub["timestamp"], errors="coerce")
+    sub = sub.dropna(subset=["timestamp"]).sort_values(["user_id", "timestamp"])
+
+    flagged_users = []
+    for uid, group in sub.groupby("user_id", observed=True):
+        deltas = group["timestamp"].diff().dt.total_seconds().dropna()
+        if len(deltas) < 10:
+            continue
+        mean_delta = deltas.mean()
+        std_delta = deltas.std()
+        if mean_delta <= 0:
+            continue
+        cv = std_delta / mean_delta
+        if cv < 0.15:
+            flagged_users.append(uid)
+
+    stats["n_users_with_metronomic_timing"] = len(flagged_users)
+
+    if len(flagged_users) > 0:
+        warnings.append(
+            f"{len(flagged_users)} user_id(s) show near-perfectly-regular request timing "
+            f"(coefficient of variation < 0.15 on inter-event intervals), inconsistent with "
+            f"human browsing patterns. This is a common signature of scripted/automated traffic. "
+            f"Sample: {flagged_users[:10]}."
+        )
+    return warnings, stats
+
 def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
     errors   = []
     warnings = []
@@ -606,6 +648,13 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
         stats.update(check_stats)
     except Exception as e:
         warnings.append(f"Traffic anomaly check 'check_publisher_ctr_cvr_divergence' failed to run: {e}")
+
+    try:
+        check_warnings, check_stats = check_timestamp_regularity(df)
+        warnings.extend(check_warnings)
+        stats.update(check_stats)
+    except Exception as e:
+        warnings.append(f"Traffic anomaly check 'check_timestamp_regularity' failed to run: {e}")
 
     return {"errors": errors, "warnings": warnings, "stats": stats}
 
