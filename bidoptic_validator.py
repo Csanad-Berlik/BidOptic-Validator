@@ -65,6 +65,58 @@ def check_user_volume_outliers(df):
         )
     return warnings, stats
 
+def check_publisher_ctr_cvr_divergence(df):
+    warnings = []
+    stats = {}
+    required = {"is_won", "is_clicked", "is_converted", "publisher_id"}
+    if not required.issubset(df.columns):
+        return warnings, stats
+
+    won = df[pd.to_numeric(df["is_won"], errors="coerce") == 1]
+    if len(won) == 0:
+        return warnings, stats
+
+    pub_stats = won.groupby("publisher_id", observed=True).agg(
+        ctr=("is_clicked", "mean"),
+        impressions=("is_clicked", "size"),
+    )
+    clicked = won[pd.to_numeric(won["is_clicked"], errors="coerce") == 1]
+    if len(clicked) == 0:
+        return warnings, stats
+
+    pub_cvr = clicked.groupby("publisher_id", observed=True)["is_converted"].mean()
+    pub_stats["cvr"] = pub_stats.index.map(pub_cvr).fillna(0.0)
+    pub_clicks = clicked.groupby("publisher_id", observed=True).size()
+    pub_stats["n_clicks"] = pub_stats.index.map(pub_clicks).fillna(0).astype(int)
+
+    MIN_CLICKS = 100
+    eligible = pub_stats[pub_stats["n_clicks"] >= MIN_CLICKS]
+    if len(eligible) == 0:
+        return warnings, stats
+
+    global_ctr = float(won["is_clicked"].mean())
+    global_cvr = float(clicked["is_converted"].mean())
+
+    suspicious = eligible[
+        (eligible["ctr"] > global_ctr * 2.0) &
+        (eligible["cvr"] < global_cvr * 0.25)
+    ]
+
+    stats["global_ctr"] = global_ctr
+    stats["global_cvr"] = global_cvr
+    stats["n_suspicious_publishers"] = int(len(suspicious))
+
+    if len(suspicious) > 0:
+        pub_ids = suspicious.index.tolist()[:10]
+        warnings.append(
+            f"{len(suspicious)} publisher(s) show CTR more than 2x the market average "
+            f"combined with CVR less than 25% of the market average (min {MIN_CLICKS} clicks "
+            f"each). This click-without-conversion pattern is a common click-fraud signature. "
+            f"Sample publisher_ids: {pub_ids}. Consider excluding these from calibration or "
+            f"flagging for your ad-fraud vendor."
+        )
+    return warnings, stats
+
 def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
     errors   = []
     warnings = []
@@ -547,6 +599,13 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
         stats.update(check_stats)
     except Exception as e:
         warnings.append(f"Traffic anomaly check 'check_user_volume_outliers' failed to run: {e}")
+
+    try:
+        check_warnings, check_stats = check_publisher_ctr_cvr_divergence(df)
+        warnings.extend(check_warnings)
+        stats.update(check_stats)
+    except Exception as e:
+        warnings.append(f"Traffic anomaly check 'check_publisher_ctr_cvr_divergence' failed to run: {e}")
 
     return {"errors": errors, "warnings": warnings, "stats": stats}
 
