@@ -159,6 +159,43 @@ def check_timestamp_regularity(df, max_users_checked=2000):
         )
     return warnings, stats
 
+def check_publisher_spend_concentration(df):
+    warnings = []
+    stats = {}
+    required = {"is_won", "publisher_id", "clearing_price", "is_converted"}
+    if not required.issubset(df.columns):
+        return warnings, stats
+
+    won = df[pd.to_numeric(df["is_won"], errors="coerce") == 1]
+    if len(won) == 0:
+        return warnings, stats
+
+    pub_spend = won.groupby("publisher_id", observed=True)["clearing_price"].sum().sort_values(ascending=False)
+    pub_convs = won.groupby("publisher_id", observed=True)["is_converted"].sum()
+
+    total_spend = pub_spend.sum()
+    if total_spend <= 0 or len(pub_spend) == 0:
+        return warnings, stats
+
+    top_n = max(1, int(len(pub_spend) * 0.05))
+    top_publishers = pub_spend.head(top_n)
+    top_spend_share = float(top_publishers.sum() / total_spend)
+    total_convs = max(float(pub_convs.sum()), 1.0)
+    top_conv_share = float(pub_convs.reindex(top_publishers.index).fillna(0).sum() / total_convs)
+
+    stats["top5pct_publisher_spend_share"] = top_spend_share
+    stats["top5pct_publisher_conversion_share"] = top_conv_share
+
+    if top_spend_share > 0.40 and top_conv_share < (top_spend_share * 0.3):
+        warnings.append(
+            f"Top 5% of publishers by volume account for {top_spend_share:.1%} of total spend "
+            f"but only {top_conv_share:.1%} of conversions. This spend/value mismatch warrants "
+            f"review — it may reflect low-quality inventory concentration rather than fraud, "
+            f"but the gap is large enough to check before calibrating the floor-price and "
+            f"pub_quality models on this data."
+        )
+    return warnings, stats
+
 def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
     errors   = []
     warnings = []
@@ -655,6 +692,13 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
         stats.update(check_stats)
     except Exception as e:
         warnings.append(f"Traffic anomaly check 'check_timestamp_regularity' failed to run: {e}")
+
+    try:
+        check_warnings, check_stats = check_publisher_spend_concentration(df)
+        warnings.extend(check_warnings)
+        stats.update(check_stats)
+    except Exception as e:
+        warnings.append(f"Traffic anomaly check 'check_publisher_spend_concentration' failed to run: {e}")
 
     return {"errors": errors, "warnings": warnings, "stats": stats}
 
