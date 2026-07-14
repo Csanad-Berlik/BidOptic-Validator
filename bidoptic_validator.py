@@ -196,6 +196,39 @@ def check_publisher_spend_concentration(df):
         )
     return warnings, stats
 
+def check_click_to_conversion_latency(df):
+    warnings = []
+    stats = {}
+    required = {"click_timestamp", "is_converted", "conversion_timestamp"}
+    if not required.issubset(df.columns):
+        return warnings, stats
+
+    conv_mask = pd.to_numeric(df["is_converted"], errors="coerce") == 1
+    conv_rows = df[conv_mask].copy()
+    if len(conv_rows) == 0:
+        return warnings, stats
+
+    click_ts = pd.to_datetime(conv_rows["click_timestamp"], errors="coerce")
+    conv_ts = pd.to_datetime(conv_rows["conversion_timestamp"], errors="coerce")
+    valid = click_ts.notna() & conv_ts.notna()
+    if valid.sum() < 20:
+        return warnings, stats
+
+    delay_seconds = (conv_ts[valid] - click_ts[valid]).dt.total_seconds()
+    near_zero = (delay_seconds < 1.0).sum()
+    near_zero_rate = float(near_zero / valid.sum())
+
+    stats["click_to_conversion_near_zero_rate"] = near_zero_rate
+
+    if near_zero_rate > 0.10:
+        warnings.append(
+            f"{near_zero_rate:.1%} of conversions occur within 1 second of the click timestamp. "
+            "Near-instant post-click conversion is inconsistent with genuine human purchase "
+            "behavior and is a common signature of fabricated or bot-driven conversion events. "
+            "Recommend reviewing affected traffic sources before calibrating."
+        )
+    return warnings, stats
+
 def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
     errors   = []
     warnings = []
@@ -700,6 +733,13 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
     except Exception as e:
         warnings.append(f"Traffic anomaly check 'check_publisher_spend_concentration' failed to run: {e}")
 
+    try:
+        check_warnings, check_stats = check_click_to_conversion_latency(df)
+        warnings.extend(check_warnings)
+        stats.update(check_stats)
+    except Exception as e:
+        warnings.append(f"Traffic anomaly check 'check_click_to_conversion_latency' failed to run: {e}")
+        
     return {"errors": errors, "warnings": warnings, "stats": stats}
 
 
