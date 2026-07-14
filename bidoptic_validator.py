@@ -705,41 +705,21 @@ def validate(df: pd.DataFrame, actual_total_rows: int = None) -> dict:
         except Exception:
             pass
 
-    try:
-        check_warnings, check_stats = check_user_volume_outliers(df)
-        warnings.extend(check_warnings)
-        stats.update(check_stats)
-    except Exception as e:
-        warnings.append(f"Traffic anomaly check 'check_user_volume_outliers' failed to run: {e}")
+    traffic_checks = [
+        check_user_volume_outliers,
+        check_publisher_ctr_cvr_divergence,
+        check_timestamp_regularity,
+        check_publisher_spend_concentration,
+        check_click_to_conversion_latency,
+    ]
+    for check_fn in traffic_checks:
+        try:
+            check_warnings, check_stats = check_fn(df)
+            warnings.extend(check_warnings)
+            stats.update(check_stats)
+        except Exception as e:
+            warnings.append(f"Traffic anomaly check '{check_fn.__name__}' failed to run: {e}")
 
-    try:
-        check_warnings, check_stats = check_publisher_ctr_cvr_divergence(df)
-        warnings.extend(check_warnings)
-        stats.update(check_stats)
-    except Exception as e:
-        warnings.append(f"Traffic anomaly check 'check_publisher_ctr_cvr_divergence' failed to run: {e}")
-
-    try:
-        check_warnings, check_stats = check_timestamp_regularity(df)
-        warnings.extend(check_warnings)
-        stats.update(check_stats)
-    except Exception as e:
-        warnings.append(f"Traffic anomaly check 'check_timestamp_regularity' failed to run: {e}")
-
-    try:
-        check_warnings, check_stats = check_publisher_spend_concentration(df)
-        warnings.extend(check_warnings)
-        stats.update(check_stats)
-    except Exception as e:
-        warnings.append(f"Traffic anomaly check 'check_publisher_spend_concentration' failed to run: {e}")
-
-    try:
-        check_warnings, check_stats = check_click_to_conversion_latency(df)
-        warnings.extend(check_warnings)
-        stats.update(check_stats)
-    except Exception as e:
-        warnings.append(f"Traffic anomaly check 'check_click_to_conversion_latency' failed to run: {e}")
-        
     return {"errors": errors, "warnings": warnings, "stats": stats}
 
 
