@@ -48,7 +48,7 @@ If your dataset passes, a machine-readable receipt is written to the current dir
 
 ## Required schema
 
-Your file must contain these 11 columns. A 12th column improves latency model accuracy but is optional.
+Your file must contain these 11 columns. A 12th column improves latency model accuracy, and a 13th enables additional fraud-detection checks, but both are optional.
 
 | Column | Type | Description |
 |---|---|---|
@@ -64,12 +64,16 @@ Your file must contain these 11 columns. A 12th column improves latency model ac
 | `conversion_timestamp` | datetime | UTC datetime of conversion. Null if no conversion. |
 | `conversion_value` | float | Revenue value of the conversion in your campaign currency. `0.0` if none. **Note:** If your data contains no revenue variance (e.g., all 0s or 1s), the system automatically enters **Binary Conversion Mode**. The LTV model is disabled, and every conversion is assigned a fixed value of 1.00 |
 | `bid_latency_ms` | float | *(Optional)* Round-trip bid latency in milliseconds. Improves latency model accuracy. |
+| `click_timestamp` | datetime | *(Optional)* UTC datetime of the click event. Enables click-to-conversion latency fraud checks. |
 
 ### Notes on `user_id`
 
 BidOptic treats `user_id` as an opaque token and normalises all formats internally. Persistent identifiers (third-party cookies, authenticated IDs) yield richer user-level signal. Non-persistent identifiers (cookieless EU traffic, rotating session IDs) degrade gracefully to session-level signal — publisher and segment models remain accurate.
 
 The validator measures the ratio of unique `user_id` values to total rows as a proxy for identifier persistence. A ratio above 50% triggers a warning; above 80% a stronger warning. Neither is a blocker — calibration proceeds either way, but user-level frequency, recency, and LTV model accuracy will be reduced for the non-persistent portion of your traffic.
+
+> [!NOTE]
+> Traffic-quality checks (bot/fraud pattern detection) may include a small number of sample `user_id` or `publisher_id` values directly in terminal or `--json` warning text, to help you locate the affected rows. These samples are **not** written to the receipt file — only aggregate counts are. If you plan to pipe terminal/JSON output anywhere outside your organization, review warning text for identifiers first.
 
 ### Notes on `ad_size`
 
@@ -121,6 +125,11 @@ Native and video inventory commonly has no fixed dimensions. Pass `native`, `vid
 | Dataset end date stale | End date > 30 days before today — freshness warning; > 90 days — severe staleness warning, recalibration strongly recommended |
 | Missing `bid_latency_ms` | Latency model falls back to market-average priors |
 | `bid_price` unit check | Median `bid_price` > $10 — column may be in CPM rather than per-impression |
+| Extreme user volume | A user_id generates >50x the median request count (or >200 requests) — possible bot/scripted traffic |
+| Publisher CTR/CVR divergence | Publisher CTR > 2x market average combined with CVR < 25% of market average (min 100 clicks) — possible click fraud |
+| Metronomic request timing | User's inter-request timing has coefficient of variation < 0.15 across 20+ requests — inconsistent with human browsing |
+| Publisher spend/conversion mismatch | Top 5% of publishers by spend account for >40% of spend but <30% of that share in conversions |
+| Near-instant click-to-conversion | >10% of conversions occur within 1 second of the click timestamp (requires optional `click_timestamp` column) |
 
 ---
 
@@ -229,6 +238,9 @@ Receipt file schema:
 ## Security
 
 This script does not make network calls. Validation is entirely local. The receipt file contains only row counts, date ranges, and a SHA-256 fingerprint of those statistics. No row-level data, win rates, or conversion metrics are included or transmitted at any point.
+
+> [!NOTE]
+> Warning messages (terminal or `--json`, not the receipt) may include a small number of sample `user_id` or `publisher_id` values when traffic-quality checks flag suspicious patterns, to help you locate affected rows locally. The receipt file itself never contains row-level identifiers.
 
 BidOptic is delivered as an air-gapped SDK in an encrypted Docker image that runs inside your own infrastructure. Your data does not leave your environment at any stage of the calibration or simulation process.
 
